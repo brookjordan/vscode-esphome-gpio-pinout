@@ -100,29 +100,34 @@
     if (rawValue == null) return { gpio: null, resolvedFrom: null };
     let v = stripOuterQuotes(String(rawValue).trim());
 
+    let isGuessed = false;
     const subM = v.match(/^\$\{([A-Za-z0-9_]+)\}$/);
     if (subM) {
       const key = subM[1];
-      if (substitutions && substitutions[key] != null) v = String(substitutions[key]).trim();
+      if (substitutions && substitutions[key] != null) {
+        v = String(substitutions[key]).trim();
+      } else {
+        isGuessed = true;
+      }
     }
 
     if (v.startsWith("{") && v.includes("number")) {
       const nm = v.match(/number\s*:\s*("?)(GPIO)?\s*(\d+)\1/i);
-      if (nm) return { gpio: parseInt(nm[3], 10), resolvedFrom: v };
+      if (nm) return { gpio: parseInt(nm[3], 10), resolvedFrom: v, isGuessed };
       const nrfNm = v.match(/number\s*:\s*P([01])\.(\d+)/i);
-      if (nrfNm) return { gpio: parseInt(nrfNm[1], 10) * 32 + parseInt(nrfNm[2], 10), resolvedFrom: v };
+      if (nrfNm) return { gpio: parseInt(nrfNm[1], 10) * 32 + parseInt(nrfNm[2], 10), resolvedFrom: v, isGuessed };
     }
 
     const nrf = v.match(/^P([01])\.(\d+)\s*$/i);
-    if (nrf) return { gpio: parseInt(nrf[1], 10) * 32 + parseInt(nrf[2], 10), resolvedFrom: v };
+    if (nrf) return { gpio: parseInt(nrf[1], 10) * 32 + parseInt(nrf[2], 10), resolvedFrom: v, isGuessed };
 
     const m = v.match(/^(GPIO)?\s*(\d+)\s*$/i);
-    if (m) return { gpio: parseInt(m[2], 10), resolvedFrom: v };
+    if (m) return { gpio: parseInt(m[2], 10), resolvedFrom: v, isGuessed };
 
     const m2 = v.match(/(GPIO)?\s*(\d+)/i);
-    if (m2) return { gpio: parseInt(m2[2], 10), resolvedFrom: v };
+    if (m2) return { gpio: parseInt(m2[2], 10), resolvedFrom: v, isGuessed };
 
-    return { gpio: null, resolvedFrom: v };
+    return { gpio: null, resolvedFrom: v, isGuessed };
   }
 
   function parsePinUsages(lines, substitutions) {
@@ -200,14 +205,16 @@
       const key = keyM[1];
       const value = keyM[2];
       const isPinKey = key === "pin" || key.endsWith("_pin");
-      if (!isPinKey) continue;
+      if (!isPinKey || currentSection === "substitutions") continue;
 
       let gpio = null;
       let where = { line: i + 1, key };
+      let isGuessed = false;
 
       if (value && value !== "") {
-        const { gpio: g } = pinValueToGpio(value, substitutions);
-        gpio = g;
+        const result = pinValueToGpio(value, substitutions);
+        gpio = result.gpio;
+        isGuessed = result.isGuessed;
         if (gpio == null) {
           unresolved.push({ ...where, rawValue: value, context: currentItem });
           continue;
@@ -218,8 +225,9 @@
           unresolved.push({ ...where, rawValue: "(nested pin with no number found)", context: currentItem });
           continue;
         }
-        const { gpio: g } = pinValueToGpio(nested.value, substitutions);
-        gpio = g;
+        const result = pinValueToGpio(nested.value, substitutions);
+        gpio = result.gpio;
+        isGuessed = result.isGuessed;
         where = { line: nested.lineIndex + 1, key };
         if (gpio == null) {
           unresolved.push({ ...where, rawValue: nested.value, context: currentItem });
@@ -229,6 +237,7 @@
 
       pushUsage(gpio, {
         gpio,
+        isGuessed,
         line: where.line,
         key: where.key,
         section: currentItem?.section ?? currentSection ?? null,
@@ -267,7 +276,23 @@
     const substitutions = parseSubstitutions(lines);
     const { board, variant, psramMode } = parseBoardVariantAndPsram(lines);
     const { usedPins, unresolved } = parsePinUsages(lines, substitutions);
-    return { ok: true, board, variant, psramMode, usedPins, unresolved, substitutions };
+    const usedGpios = new Set(usedPins.keys());
+    const unusedGpioSubstitutions = [];
+    for (const [key, val] of Object.entries(substitutions)) {
+      if (!(key === "pin" || key.endsWith("_pin"))) continue;
+      const { gpio } = pinValueToGpio(val, {});
+      if (gpio != null && !usedGpios.has(gpio)) unusedGpioSubstitutions.push({ key, value: val, gpio });
+    }
+    return {
+      ok: true,
+      board: resolveTemplates(board, substitutions),
+      variant: resolveTemplates(variant, substitutions),
+      psramMode,
+      usedPins,
+      unresolved,
+      substitutions,
+      unusedGpioSubstitutions,
+    };
   }
 
   function resolveTemplates(str, subs) {
