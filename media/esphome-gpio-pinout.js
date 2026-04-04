@@ -494,7 +494,7 @@
       if (availableGpios.size && !availableGpios.has(gpio))
         list.push({ severity: "danger", text: "GPIO not present or not broken out on this board layout." });
       if (usages.some((u) => u.isGuessed))
-        list.push({ severity: "warn", text: "GPIO number guessed from unresolved substitution." });
+        list.push({ severity: "warn", text: "GPIO number guessed from unresolved value." });
       if (list.length) issuesByGpio.set(gpio, list);
     }
 
@@ -1301,7 +1301,7 @@
                 (acc, it) => (severityRank(it.severity) > severityRank(acc) ? it.severity : acc),
                 "none",
               );
-              const isGuessed = issues.some((it) => it.text === "GPIO number guessed from unresolved substitution.");
+              const isGuessed = issues.some((it) => it.text === "GPIO number guessed from unresolved value.");
               const badge =
                 worst === "danger"
                   ? `<span class="tm-badge tm-badge-danger">DANGER</span>`
