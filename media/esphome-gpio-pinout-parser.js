@@ -27,6 +27,7 @@
 
   function parseSubstitutions(lines) {
     const subs = {};
+    const subLines = {};
     let inSubs = false;
 
     for (let i = 0; i < lines.length; i++) {
@@ -43,10 +44,13 @@
       if (indent === 0 && /^[A-Za-z0-9_]+\s*:/.test(trimmed) && !/^substitutions:\s*$/.test(trimmed)) break;
 
       const m = raw.match(/^\s*([A-Za-z0-9_]+)\s*:\s*(.+?)\s*$/);
-      if (m) subs[m[1]] = stripOuterQuotes(m[2]);
+      if (m) {
+        subs[m[1]] = stripOuterQuotes(m[2]);
+        subLines[m[1]] = i + 1;
+      }
     }
 
-    return subs;
+    return { subs, subLines };
   }
 
   function parseBoardVariantAndPsram(lines) {
@@ -101,11 +105,13 @@
     let v = stripOuterQuotes(String(rawValue).trim());
 
     let isGuessed = false;
+    let subKey = null;
     const subM = v.match(/^\$\{([A-Za-z0-9_]+)\}$/);
     if (subM) {
       const key = subM[1];
       if (substitutions && substitutions[key] != null) {
         v = String(substitutions[key]).trim();
+        subKey = key;
       } else {
         isGuessed = true;
       }
@@ -113,24 +119,24 @@
 
     if (v.startsWith("{") && v.includes("number")) {
       const nm = v.match(/number\s*:\s*("?)(GPIO)?\s*(\d+)\1/i);
-      if (nm) return { gpio: parseInt(nm[3], 10), resolvedFrom: v, isGuessed };
+      if (nm) return { gpio: parseInt(nm[3], 10), resolvedFrom: v, isGuessed, subKey };
       const nrfNm = v.match(/number\s*:\s*P([01])\.(\d+)/i);
-      if (nrfNm) return { gpio: parseInt(nrfNm[1], 10) * 32 + parseInt(nrfNm[2], 10), resolvedFrom: v, isGuessed };
+      if (nrfNm) return { gpio: parseInt(nrfNm[1], 10) * 32 + parseInt(nrfNm[2], 10), resolvedFrom: v, isGuessed, subKey };
     }
 
     const nrf = v.match(/^P([01])\.(\d+)\s*$/i);
-    if (nrf) return { gpio: parseInt(nrf[1], 10) * 32 + parseInt(nrf[2], 10), resolvedFrom: v, isGuessed };
+    if (nrf) return { gpio: parseInt(nrf[1], 10) * 32 + parseInt(nrf[2], 10), resolvedFrom: v, isGuessed, subKey };
 
     const m = v.match(/^(GPIO)?\s*(\d+)\s*$/i);
-    if (m) return { gpio: parseInt(m[2], 10), resolvedFrom: v, isGuessed };
+    if (m) return { gpio: parseInt(m[2], 10), resolvedFrom: v, isGuessed, subKey };
 
     const m2 = v.match(/(GPIO)?\s*(\d+)/i);
-    if (m2) return { gpio: parseInt(m2[2], 10), resolvedFrom: v, isGuessed };
+    if (m2) return { gpio: parseInt(m2[2], 10), resolvedFrom: v, isGuessed: true, subKey };
 
-    return { gpio: null, resolvedFrom: v, isGuessed };
+    return { gpio: null, resolvedFrom: v, isGuessed, subKey };
   }
 
-  function parsePinUsages(lines, substitutions) {
+  function parsePinUsages(lines, substitutions, subLines) {
     const usedPins = new Map();
     const unresolved = [];
     let currentSection = null;
@@ -210,11 +216,13 @@
       let gpio = null;
       let where = { line: i + 1, key };
       let isGuessed = false;
+      let subKey = null;
 
       if (value && value !== "") {
         const result = pinValueToGpio(value, substitutions);
         gpio = result.gpio;
         isGuessed = result.isGuessed;
+        subKey = result.subKey;
         if (gpio == null) {
           unresolved.push({ ...where, rawValue: value, context: currentItem });
           continue;
@@ -228,6 +236,7 @@
         const result = pinValueToGpio(nested.value, substitutions);
         gpio = result.gpio;
         isGuessed = result.isGuessed;
+        subKey = result.subKey;
         where = { line: nested.lineIndex + 1, key };
         if (gpio == null) {
           unresolved.push({ ...where, rawValue: nested.value, context: currentItem });
@@ -246,6 +255,20 @@
         name: currentItem?.name ?? null,
         context: currentItem || null,
       });
+
+      if (subKey && subLines && subLines[subKey] != null) {
+        pushUsage(gpio, {
+          gpio,
+          isGuessed: false,
+          line: subLines[subKey],
+          key: subKey,
+          section: "substitutions",
+          platform: null,
+          id: null,
+          name: null,
+          context: null,
+        });
+      }
     }
 
     for (const list of usedPins.values()) {
@@ -273,9 +296,9 @@
       };
     }
     const lines = yamlText.split(/\r?\n/);
-    const substitutions = parseSubstitutions(lines);
+    const { subs: substitutions, subLines } = parseSubstitutions(lines);
     const { board, variant, psramMode } = parseBoardVariantAndPsram(lines);
-    const { usedPins, unresolved } = parsePinUsages(lines, substitutions);
+    const { usedPins, unresolved } = parsePinUsages(lines, substitutions, subLines);
     const usedGpios = new Set(usedPins.keys());
     const unusedGpioSubstitutions = [];
     for (const [key, val] of Object.entries(substitutions)) {
