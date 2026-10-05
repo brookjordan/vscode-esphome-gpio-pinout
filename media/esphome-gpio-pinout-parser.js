@@ -45,7 +45,9 @@
 
       const m = raw.match(/^\s*([A-Za-z0-9_]+)\s*:\s*(.+?)\s*$/);
       if (m) {
-        subs[m[1]] = stripOuterQuotes(m[2]);
+        let val = m[2];
+        if (!val.startsWith('"') && !val.startsWith("'")) val = val.replace(/\s+#.*$/, "");
+        subs[m[1]] = stripOuterQuotes(val);
         subLines[m[1]] = i + 1;
       }
     }

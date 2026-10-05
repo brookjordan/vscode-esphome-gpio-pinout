@@ -307,6 +307,29 @@ suite("Pinout logic", () => {
     assert.strictEqual(subUsage.line, 2);
   });
 
+  test("strips inline comments from substitution values", () => {
+    const yaml = [
+      "substitutions:",
+      "  my_pin: GPIO0  # high",
+      '  my_pass: "foo#bar"',
+      "esphome:",
+      "  name: test",
+      "esp32:",
+      "  board: esp32dev",
+      "switch:",
+      "  - platform: gpio",
+      "    pin: ${my_pin}",
+    ].join("\n");
+
+    const parsed = logic.parseEsphomeYaml(yaml);
+    assert.ok(parsed.ok);
+    assert.strictEqual(parsed.substitutions.my_pin, "GPIO0");
+    assert.strictEqual(parsed.substitutions.my_pass, "foo#bar");
+    const usages = parsed.usedPins.get(0);
+    assert.ok(usages);
+    assert.ok(!usages.some((u) => u.isGuessed), "Should not be guessed when comment is stripped");
+  });
+
   test("backfills name/id for ultrasonic trigger/echo pins", () => {
     const yaml = [
       "esphome:",
